@@ -7,12 +7,12 @@ RUN apt-get update && \
 
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV REMOTION_BUNDLE_PATH=/app/remotion
-ENV OUTPUT_DIR=/output
 
 WORKDIR /app
 
 # IMPORTANT: this Dockerfile expects the Render build context to be the openshorts repository root.
-# Keep the Render service Root Directory set to the repo root so these COPY paths resolve.
+# Rendered outputs are uploaded to Cloudflare R2. Ensure R2 credentials are set in environment:
+# R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET
 
 # Copy render service source
 COPY render-service/package.json ./

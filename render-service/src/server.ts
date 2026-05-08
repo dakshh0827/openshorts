@@ -44,10 +44,9 @@ const app = express();
 app.use(express.json({ limit: "10mb" }));
 
 const PORT = parseInt(process.env.PORT || "3100", 10);
-const OUTPUT_DIR = process.env.OUTPUT_DIR || "/output";
 
-// Serve video files from the shared output volume so Remotion can access them via HTTP
-app.use("/output", express.static(OUTPUT_DIR));
+// Note: Rendered outputs are now stored in Cloudflare R2 instead of local disk
+// Input videos are accessed via their provided URLs (can be FastAPI endpoints or R2 presigned URLs)
 
 // Health check
 app.get("/health", (_req, res) => {

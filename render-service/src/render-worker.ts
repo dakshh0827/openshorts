@@ -1,9 +1,14 @@
 import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { selectComposition, renderMedia } from "@remotion/renderer";
 import { getBundleLocation } from "./bundle.js";
 import { renderJobs } from "./server.js";
+import {
+  uploadFileToR2,
+  generatePresignedUrl,
+} from "./r2-uploader.js";
 
 export interface RenderParams {
   renderId: string;
@@ -51,28 +56,23 @@ export async function executeRender(params: RenderParams): Promise<void> {
       inputProps: props,
     });
 
-    // Determine output directory and file path
-    const serviceDir = path.dirname(fileURLToPath(import.meta.url));
-    const outputDir = process.env.OUTPUT_DIR
-      ? path.resolve(process.env.OUTPUT_DIR)
-      : path.resolve(serviceDir, "../../output");
-
-    const jobOutputDir = path.join(outputDir, jobId);
-    fs.mkdirSync(jobOutputDir, { recursive: true });
-
+    // Use system temp directory for temporary file storage
+    const tempDir = os.tmpdir();
     const timestamp = Date.now();
     const outputFileName = `remotion_${clipIndex}_${timestamp}.mp4`;
-    const outputLocation = path.join(jobOutputDir, outputFileName);
+    const tempOutputLocation = path.join(tempDir, outputFileName);
 
-    console.log(`[render-worker] Output: ${outputLocation}`);
+    console.log(
+      `[render-worker] Rendering to temp: ${tempOutputLocation}`
+    );
 
-    // Render the video
+    // Render the video to temporary file
     await renderMedia({
       composition,
       serveUrl: bundleLocation,
       codec: "h264",
       crf: 22,
-      outputLocation,
+      outputLocation: tempOutputLocation,
       onProgress: ({ progress }) => {
         const percent = Math.round(progress * 100);
         job.progress = percent;
@@ -83,12 +83,42 @@ export async function executeRender(params: RenderParams): Promise<void> {
       },
     });
 
+    // Upload rendered file to R2
+    const bucketName = process.env.R2_BUCKET || "clips";
+    const r2Key = `rendered/${jobId}/${outputFileName}`;
+
+    console.log(`[render-worker] Uploading to R2: s3://${bucketName}/${r2Key}`);
+
+    const uploadSuccess = await uploadFileToR2(
+      tempOutputLocation,
+      bucketName,
+      r2Key
+    );
+
+    // Clean up temp file
+    if (fs.existsSync(tempOutputLocation)) {
+      fs.unlinkSync(tempOutputLocation);
+      console.log(`[render-worker] Cleaned up temp file: ${tempOutputLocation}`);
+    }
+
+    if (!uploadSuccess) {
+      throw new Error(`Failed to upload rendered video to R2`);
+    }
+
+    // Generate presigned URL (valid for 24 hours)
+    const presignedUrl = await generatePresignedUrl(bucketName, r2Key, 86400);
+
+    if (!presignedUrl) {
+      throw new Error(`Failed to generate presigned URL for R2 object`);
+    }
+
     // Success
     job.status = "done";
     job.progress = 100;
-    job.outputUrl = outputLocation;
+    job.outputUrl = presignedUrl;
 
-    console.log(`[render-worker] Render ${renderId} completed: ${outputLocation}`);
+    console.log(`[render-worker] Render ${renderId} completed`);
+    console.log(`[render-worker] Output URL: ${presignedUrl}`);
   } catch (err) {
     job.status = "error";
     job.error = err instanceof Error ? err.message : String(err);
